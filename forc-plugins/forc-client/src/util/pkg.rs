@@ -196,8 +196,9 @@ pub fn generate_proxy_contract_with_chunking_src(
     contract.push_str("configurable {\n");
     for i in 1..=num_chunks {
         contract.push_str(&format!(
-            "    TARGET_{}: ContractId = 0x{},\n",
-            i, chunk_contract_ids[i]
+            "    TARGET_{}: ContractId = ContractId::from({}),\n",
+            i,
+            chunk_contract_ids[i - 1]
         ));
     }
     contract.push_str("}\n\n");
@@ -441,6 +442,26 @@ pub(crate) fn create_proxy_contract_with_chunking(
         generate_proxy_contract_with_chunking_src(abi, num_chunks, chunk_contract_ids);
     write!(f, "{}", contract_str)?;
     Ok(proxy_contract_dir)
+}
+
+pub fn build_loader_contract(
+    abi: &ProgramABI,
+    chunk_contract_ids: &[String],
+    num_chunks: usize,
+    pkg_name: &str,
+    build_opts: &BuildOpts,
+) -> Result<Arc<BuiltPackage>> {
+    let loader_contract =
+        create_proxy_contract_with_chunking(abi, chunk_contract_ids, num_chunks, pkg_name)?;
+    let mut build_opts = build_opts.clone();
+    let proxy_contract_dir_str = format!("{}", loader_contract.clone().display());
+    build_opts.pkg.path = Some(proxy_contract_dir_str);
+    let built_pkgs = built_pkgs(&loader_contract, &build_opts)?;
+    let built_pkg = built_pkgs
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("could not get proxy contract"))?;
+    Ok(built_pkg)
 }
 
 pub(crate) fn built_pkgs(path: &Path, build_opts: &BuildOpts) -> Result<Vec<Arc<BuiltPackage>>> {
