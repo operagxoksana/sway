@@ -42,7 +42,10 @@ use sway_core::language::parsed::TreeType;
 use sway_core::BuildTarget;
 use tracing::info;
 
-const MAX_CONTRACT_SIZE: usize = 480;
+/// Maximum contract size allowed to be in a single contract. If the target
+/// contract size is bigger than this amount, forc-deploy will automatically
+/// starts dividing the contract and deploy them automatically. In bytes.
+const MAX_CONTRACT_SIZE: usize = 100_000;
 
 #[derive(Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
 pub struct DeployedContract {
@@ -186,8 +189,11 @@ async fn deploy_chunked(
     provider: &Provider,
     pkg_name: &str,
 ) -> anyhow::Result<(ContractId, Vec<ContractId>)> {
+    let max_contract_size = command
+        .maximum_contract_size
+        .unwrap_or_else(|| MAX_CONTRACT_SIZE);
     // TODO: remove this clone.
-    let contract_chunks = split_into_chunks(compiled.bytecode.bytes.clone(), MAX_CONTRACT_SIZE);
+    let contract_chunks = split_into_chunks(compiled.bytecode.bytes.clone(), max_contract_size);
     let mut deployed_contracts = vec![];
     for contract_chunk in contract_chunks {
         let deployed_contract = contract_chunk

@@ -81,4 +81,8 @@ pub struct Command {
     /// Disable the "new encoding" feature
     #[clap(long)]
     pub no_encoding_v1: bool,
+
+    /// Maximum contrat size, after which forc-deploy automatically splits the contract into chunks.
+    #[clap(long)]
+    pub maximum_contract_size: Option<usize>,
 }

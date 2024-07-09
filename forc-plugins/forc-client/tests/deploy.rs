@@ -144,6 +144,7 @@ async fn simple_deploy() {
         )
         .unwrap(),
         proxy: None,
+        chunks: vec![],
     }];
 
     assert_eq!(contract_ids, expected)
@@ -193,6 +194,7 @@ async fn deploy_fresh_proxy() {
             )
             .unwrap(),
         ),
+        chunks: vec![],
     };
     let expected = vec![impl_contract];
 
