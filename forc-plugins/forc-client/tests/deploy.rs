@@ -149,6 +149,63 @@ async fn simple_deploy() {
 
     assert_eq!(contract_ids, expected)
 }
+#[tokio::test]
+async fn chunked_deploy() {
+    let (mut node, port) = run_node();
+    let tmp_dir = tempdir().unwrap();
+    let project_dir = test_data_path().join("standalone_contract");
+    copy_dir(&project_dir, tmp_dir.path()).unwrap();
+    patch_manifest_file_with_path_std(tmp_dir.path()).unwrap();
+
+    let pkg = Pkg {
+        path: Some(tmp_dir.path().display().to_string()),
+        ..Default::default()
+    };
+
+    let node_url = format!("http://127.0.0.1:{}/v1/graphql", port);
+    let target = NodeTarget {
+        node_url: Some(node_url),
+        target: None,
+        testnet: false,
+    };
+    let cmd = cmd::Deploy {
+        pkg,
+        salt: Some(vec![format!("{}", Salt::default())]),
+        node: target,
+        default_signer: true,
+        maximum_contract_size: Some(480),
+        ..Default::default()
+    };
+    let contract_ids = deploy(cmd).await.unwrap();
+    node.kill().unwrap();
+    let expected = vec![DeployedContract {
+        id: ContractId::from_str(
+            "8f940578f3a0318cc7eb5f099bedd762c8082a3827f880e9ad66f12b694a5c38",
+        )
+        .unwrap(),
+        proxy: None,
+        chunks: vec![
+            ContractId::from_str(
+                "729ec21b3966e9105699aa6f10c07bec8af0b72c6fadd099961d8cfbea34e45f",
+            )
+            .unwrap(),
+            ContractId::from_str(
+                "91fce82e763bbb94c788510a9249cb501460a53c9fe27a68365cee70b5bd6de2",
+            )
+            .unwrap(),
+            ContractId::from_str(
+                "5c655e1c02612ea7743b857816226faee077bb357dc6966a234f1db5fca3c33f",
+            )
+            .unwrap(),
+            ContractId::from_str(
+                "2b0a8a8fde26d345c5ec441fec7ab62fa080b0e1a0a7bf2817f0a6dcef827eda",
+            )
+            .unwrap(),
+        ],
+    }];
+
+    assert_eq!(contract_ids, expected)
+}
 
 #[tokio::test]
 async fn deploy_fresh_proxy() {

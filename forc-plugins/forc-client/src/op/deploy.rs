@@ -335,7 +335,10 @@ pub async fn deploy(command: cmd::Deploy) -> Result<Vec<DeployedContract>> {
                 &pkg.descriptor.name
             );
             let bytecode_size = pkg.bytecode.bytes.len();
-            let (deployed_contract_id, chunk_ids) = if bytecode_size > MAX_CONTRACT_SIZE {
+            let max_contract_size = command
+                .maximum_contract_size
+                .unwrap_or_else(|| MAX_CONTRACT_SIZE);
+            let (deployed_contract_id, chunk_ids) = if bytecode_size > max_contract_size {
                 // Deploy chunked
                 let node_url = get_node_url(&command.node, &pkg.descriptor.manifest_file.network)?;
                 let provider = Provider::connect(node_url).await?;
