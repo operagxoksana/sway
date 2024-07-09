@@ -57,18 +57,6 @@ impl ContractChunk {
         Self { id, size, bytecode }
     }
 
-    pub fn id(&self) -> usize {
-        self.id
-    }
-
-    pub fn size(&self) -> usize {
-        self.size
-    }
-
-    pub fn bytecode(&self) -> &[u8] {
-        &self.bytecode
-    }
-
     pub async fn deploy(
         self,
         provider: &Provider,

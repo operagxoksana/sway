@@ -48,6 +48,7 @@ const MAX_CONTRACT_SIZE: usize = 480;
 pub struct DeployedContract {
     pub id: fuel_tx::ContractId,
     pub proxy: Option<fuel_tx::ContractId>,
+    pub chunks: Vec<fuel_tx::ContractId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -418,6 +419,7 @@ pub async fn deploy(command: cmd::Deploy) -> Result<Vec<DeployedContract>> {
             let deployed_contract = DeployedContract {
                 id: deployed_contract_id,
                 proxy: proxy_id,
+                chunks: chunk_ids,
             };
             deployed_contracts.push(deployed_contract);
         }
