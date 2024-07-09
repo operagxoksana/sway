@@ -189,9 +189,7 @@ async fn deploy_chunked(
     provider: &Provider,
     pkg_name: &str,
 ) -> anyhow::Result<(ContractId, Vec<ContractId>)> {
-    let max_contract_size = command
-        .maximum_contract_size
-        .unwrap_or_else(|| MAX_CONTRACT_SIZE);
+    let max_contract_size = command.maximum_contract_size.unwrap_or(MAX_CONTRACT_SIZE);
     // TODO: remove this clone.
     let contract_chunks = split_into_chunks(compiled.bytecode.bytes.clone(), max_contract_size);
     let mut deployed_contracts = vec![];
@@ -208,7 +206,7 @@ async fn deploy_chunked(
 
     let deployed_contracts: Vec<_> = deployed_contracts
         .iter()
-        .map(|deployed_contract| deployed_contract.contract_id().clone())
+        .map(|deployed_contract| *deployed_contract.contract_id())
         .collect();
 
     let program_abi = match &compiled.program_abi {
@@ -335,9 +333,7 @@ pub async fn deploy(command: cmd::Deploy) -> Result<Vec<DeployedContract>> {
                 &pkg.descriptor.name
             );
             let bytecode_size = pkg.bytecode.bytes.len();
-            let max_contract_size = command
-                .maximum_contract_size
-                .unwrap_or_else(|| MAX_CONTRACT_SIZE);
+            let max_contract_size = command.maximum_contract_size.unwrap_or(MAX_CONTRACT_SIZE);
             let (deployed_contract_id, chunk_ids) = if bytecode_size > max_contract_size {
                 // Deploy chunked
                 let node_url = get_node_url(&command.node, &pkg.descriptor.manifest_file.network)?;

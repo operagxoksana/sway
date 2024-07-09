@@ -68,7 +68,7 @@ impl ContractChunk {
             wallet_mode,
             command.default_signer || command.unsigned,
             command.signing_key,
-            &provider,
+            provider,
         )
         .await?
         .ok_or_else(|| anyhow::anyhow!("failed to select a signer for the transaction"))?;
@@ -100,14 +100,12 @@ pub fn split_into_chunks(bytecode: Vec<u8>, chunk_size: usize) -> Vec<ContractCh
     // them to word boundry.
     assert!(chunk_size % 8 == 0);
     let mut chunks = Vec::new();
-    let mut id = 0;
 
-    for chunk in bytecode.chunks(chunk_size) {
+    for (id, chunk) in bytecode.chunks(chunk_size).enumerate() {
         let chunk = chunk.to_vec();
         let size = chunk.len();
         let contract_chunk = ContractChunk::new(id, size, chunk);
         chunks.push(contract_chunk);
-        id += 1;
     }
 
     chunks
