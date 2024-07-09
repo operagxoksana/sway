@@ -3,7 +3,11 @@ use crate::{
     constants::TX_SUBMIT_TIMEOUT_MS,
     util::{
         node_url::get_node_url,
-        pkg::{build_proxy_contract, built_pkgs, update_proxy_address_in_manifest},
+        pkg::{
+            build_proxy_contract, built_pkgs, create_proxy_contract_with_chunking,
+            generate_proxy_contract_with_chunking_src, split_into_chunks,
+            update_proxy_address_in_manifest,
+        },
         tx::{
             bech32_from_secret, check_and_create_wallet_at_default_path, first_user_account,
             prompt_forc_wallet_password, select_manual_secret_key, select_secret_key,
@@ -171,6 +175,46 @@ async fn deploy_new_proxy(
     .await?;
     Ok(proxy)
 }
+
+async fn deploy_chunked(
+    command: &cmd::Deploy,
+    compiled: &BuiltPackage,
+    salt: Salt,
+    wallet_mode: &WalletSelectionMode,
+    provider: &Provider,
+    pkg_name: &str,
+) -> anyhow::Result<()> {
+    const MAX_CONTRACT_SIZE: usize = 8192;
+    // TODO: remove this clone.
+    let contract_chunks = split_into_chunks(compiled.bytecode.bytes.clone(), MAX_CONTRACT_SIZE);
+    let mut deployed_contracts = vec![];
+    for contract_chunk in contract_chunks {
+        let deployed_contract = contract_chunk
+            .deploy(provider, &salt, command, wallet_mode)
+            .await?;
+        deployed_contracts.push(deployed_contract);
+    }
+    let deployed_contract_ids: Vec<String> = deployed_contracts
+        .iter()
+        .map(|deployed_contract| format!("0x{}", deployed_contract.contract_id()))
+        .collect();
+
+    let program_abi = match &compiled.program_abi {
+        sway_core::asm_generation::ProgramABI::Fuel(abi) => abi,
+        _ => bail!("contract chunking is only supported with fuelVM"),
+    };
+
+    let loader_path = create_proxy_contract_with_chunking(
+        program_abi,
+        &deployed_contract_ids,
+        deployed_contracts.len(),
+        pkg_name,
+    )?;
+
+    println!("{}", loader_path.display());
+    Ok(())
+}
+
 /// Builds and deploys contract(s). If the given path corresponds to a workspace, all deployable members
 /// will be built and deployed.
 ///

@@ -3,12 +3,22 @@ use forc_pkg::manifest::GenericManifestFile;
 use forc_pkg::{self as pkg, manifest::ManifestFile, BuildOpts, BuildPlan};
 use forc_util::user_forc_directory;
 use fuel_abi_types::abi::program::ProgramABI;
+use fuel_tx::{ContractId, Salt, StorageSlot};
+use fuels_accounts::provider::Provider;
+use fuels_accounts::wallet::WalletUnlocked;
+use fuels_core::types::transaction::TxPolicies;
 use pkg::{build_with_options, BuiltPackage, PackageManifestFile};
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::{collections::HashMap, path::Path, sync::Arc};
 use sway_utils::{MAIN_ENTRY, MANIFEST_FILE_NAME, SRC_DIR};
+
+use crate::cmd;
+use crate::util::tx::select_secret_key;
+
+use super::tx::WalletSelectionMode;
 
 /// The name of the folder that forc generated proxy contract project will reside at.
 pub const PROXY_CONTRACT_FOLDER_NAME: &str = ".generated_proxy_contracts";
@@ -23,6 +33,97 @@ name = "proxy_contract"
 [dependencies]
 standards = { git = "https://github.com/FuelLabs/sway-standards/", tag = "v0.5.0" }
 "#;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ContractChunk {
+    id: usize,
+    size: usize,
+    bytecode: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DeployedContractChunk {
+    contract_id: ContractId,
+}
+
+impl DeployedContractChunk {
+    pub fn contract_id(&self) -> &ContractId {
+        &self.contract_id
+    }
+}
+
+impl ContractChunk {
+    pub fn new(id: usize, size: usize, bytecode: Vec<u8>) -> Self {
+        Self { id, size, bytecode }
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    pub fn bytecode(&self) -> &[u8] {
+        &self.bytecode
+    }
+
+    pub async fn deploy(
+        self,
+        provider: &Provider,
+        salt: &Salt,
+        command: &cmd::Deploy,
+        wallet_mode: &WalletSelectionMode,
+    ) -> anyhow::Result<DeployedContractChunk> {
+        let signing_key = select_secret_key(
+            wallet_mode,
+            command.default_signer || command.unsigned,
+            command.signing_key,
+            &provider,
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("failed to select a signer for the transaction"))?;
+        let wallet = WalletUnlocked::new_from_private_key(signing_key, Some(provider.clone()));
+
+        let contract_chunk_storage_slot = StorageSlot::default();
+        let contract_chunk = fuels::programs::contract::Contract::new(
+            self.bytecode,
+            *salt,
+            vec![contract_chunk_storage_slot],
+        );
+
+        let policies = TxPolicies::default();
+        let bech32 = contract_chunk.deploy(&wallet, policies).await?;
+        let contract_id = ContractId::from(bech32);
+        Ok(DeployedContractChunk { contract_id })
+    }
+}
+
+/// Split bytecode into chunks of a specified maximum size. Meaning that each
+/// chunk up until the last one, is guarenteed to be `chunk_size`, and
+/// `chunk_size` is guarenteed to be divisble by 8, and will panic otherwise.
+/// This requirement comes from VM, as LDC'ed bytecode is appended to word
+/// boundry.
+///
+/// Panics: if the chunk size is not divisible by 8.
+pub fn split_into_chunks(bytecode: Vec<u8>, chunk_size: usize) -> Vec<ContractChunk> {
+    // This is done so that LDC'ed bytecode aligns perfectly, as the VM appends
+    // them to word boundry.
+    assert!(chunk_size % 8 == 0);
+    let mut chunks = Vec::new();
+    let mut id = 0;
+
+    for chunk in bytecode.chunks(chunk_size) {
+        let chunk = chunk.to_vec();
+        let size = chunk.len();
+        let contract_chunk = ContractChunk::new(id, size, chunk);
+        chunks.push(contract_chunk);
+        id += 1;
+    }
+
+    chunks
+}
 
 /// Generates source code for proxy contract owner set to the given 'addr'.
 pub(crate) fn generate_proxy_contract_src(addr: &str, impl_contract_id: &str) -> String {
@@ -80,10 +181,10 @@ fn only_owner() {{
     )
 }
 
-fn generate_proxy_contract_with_chunking_src(
+pub fn generate_proxy_contract_with_chunking_src(
     abi: &ProgramABI,
     num_chunks: usize,
-    chunk_contract_ids: &[&str],
+    chunk_contract_ids: &[String],
 ) -> String {
     let mut contract = String::new();
     let types = create_type_map(abi);
@@ -306,7 +407,7 @@ pub(crate) fn create_proxy_contract(
 /// Creates a proxy contract with chunking at the given path, adds a forc.toml and source file.
 pub(crate) fn create_proxy_contract_with_chunking(
     abi: &ProgramABI,
-    chunk_contract_ids: &[&str],
+    chunk_contract_ids: &[String],
     num_chunks: usize,
     pkg_name: &str,
 ) -> Result<PathBuf> {
@@ -394,10 +495,10 @@ pub fn build_proxy_contract(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
+    use super::*;
     use forc_pkg::BuildOpts;
     use forc_util::user_forc_directory;
+    use std::path::PathBuf;
 
     use super::{build_proxy_contract, PROXY_CONTRACT_FOLDER_NAME};
 
@@ -425,5 +526,55 @@ mod tests {
             .join(pkg_name);
         // Cleanup the test artifacts
         std::fs::remove_dir_all(proxy_contract_dir).expect("failed to clean test artifacts")
+    }
+
+    #[test]
+    fn test_split_into_chunks_exact_division() {
+        let bytecode = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let chunk_size = 8;
+        let chunks = split_into_chunks(bytecode.clone(), chunk_size);
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(
+            chunks[0],
+            ContractChunk::new(0, 8, vec![1, 2, 3, 4, 5, 6, 7, 8])
+        );
+        assert_eq!(
+            chunks[1],
+            ContractChunk::new(1, 8, vec![9, 10, 11, 12, 13, 14, 15, 16])
+        );
+    }
+
+    #[test]
+    fn test_split_into_chunks_with_remainder() {
+        let bytecode = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let chunk_size = 8;
+        let chunks = split_into_chunks(bytecode.clone(), chunk_size);
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(
+            chunks[0],
+            ContractChunk::new(0, 8, vec![1, 2, 3, 4, 5, 6, 7, 8])
+        );
+        assert_eq!(chunks[1], ContractChunk::new(1, 1, vec![9]));
+    }
+
+    #[test]
+    fn test_split_into_chunks_empty_bytecode() {
+        let bytecode = vec![];
+        let chunk_size = 8;
+        let chunks = split_into_chunks(bytecode.clone(), chunk_size);
+
+        assert_eq!(chunks.len(), 0);
+    }
+
+    #[test]
+    fn test_split_into_chunks_smaller_than_chunk_size() {
+        let bytecode = vec![1, 2, 3];
+        let chunk_size = 8;
+        let chunks = split_into_chunks(bytecode.clone(), chunk_size);
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], ContractChunk::new(0, 3, vec![1, 2, 3]));
     }
 }
