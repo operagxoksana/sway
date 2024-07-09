@@ -2,6 +2,7 @@ use anyhow::Result;
 use forc_pkg::manifest::GenericManifestFile;
 use forc_pkg::{self as pkg, manifest::ManifestFile, BuildOpts, BuildPlan};
 use forc_util::user_forc_directory;
+use fuel_abi_types::abi::program::ProgramABI;
 use pkg::{build_with_options, BuiltPackage, PackageManifestFile};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -79,6 +80,170 @@ fn only_owner() {{
     )
 }
 
+fn generate_proxy_contract_with_chunking_src(
+    abi: &ProgramABI,
+    num_chunks: usize,
+    chunk_contract_ids: &[&str],
+) -> String {
+    let mut contract = String::new();
+    let types = create_type_map(abi);
+
+    // Contract header
+    contract.push_str("contract;\n\n");
+
+    // Configurables
+    contract.push_str("configurable {\n");
+    for i in 1..=num_chunks {
+        contract.push_str(&format!(
+            "    TARGET_{}: ContractId = 0x{},\n",
+            i, chunk_contract_ids[i]
+        ));
+    }
+    contract.push_str("}\n\n");
+
+    // ABI
+    contract.push_str("abi RunExternalTest {\n");
+    for function in &abi.functions {
+        let inputs = function
+            .inputs
+            .iter()
+            .map(|input| {
+                format!(
+                    "{}: {}",
+                    input.name,
+                    type_id_to_string(input.type_id, &types)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let output = type_id_to_string(function.output.type_id, &types);
+        contract.push_str(&format!(
+            "    fn {}({}) -> {};\n",
+            function.name, inputs, output
+        ));
+    }
+    contract.push_str("}\n\n");
+
+    // Implementation
+    contract.push_str("impl RunExternalTest for Contract {\n");
+    for function in &abi.functions {
+        let inputs = function
+            .inputs
+            .iter()
+            .map(|input| {
+                format!(
+                    "{}: {}",
+                    input.name,
+                    type_id_to_string(input.type_id, &types)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let output = type_id_to_string(function.output.type_id, &types);
+        contract.push_str(&format!(
+            "    fn {}({}) -> {} {{\n",
+            function.name, inputs, output
+        ));
+        contract.push_str(&format!("        run_external{}(", num_chunks));
+        for i in 1..=num_chunks {
+            if i > 1 {
+                contract.push_str(", ");
+            }
+            contract.push_str(&format!("TARGET_{}", i));
+        }
+        contract.push_str(")\n    }\n");
+    }
+    contract.push_str("}\n\n");
+
+    // run_external function
+    contract.push_str(&generate_run_external(num_chunks));
+
+    contract
+}
+
+fn create_type_map(abi: &ProgramABI) -> HashMap<usize, String> {
+    abi.types
+        .iter()
+        .map(|t| (t.type_id, t.type_field.clone()))
+        .collect()
+}
+
+fn type_id_to_string(type_id: usize, types: &HashMap<usize, String>) -> String {
+    types
+        .get(&type_id)
+        .cloned()
+        .unwrap_or_else(|| format!("Type{}", type_id))
+}
+
+fn generate_run_external(num_targets: usize) -> String {
+    let mut func = String::new();
+
+    func.push_str(&format!("fn run_external{}(", num_targets));
+    for i in 1..=num_targets {
+        if i > 1 {
+            func.push_str(", ");
+        }
+        func.push_str(&format!("load_target{}: ContractId", i));
+    }
+    func.push_str(") -> ! {\n");
+
+    // Generate assembly
+    func.push_str("    asm(\n");
+    for i in 1..=num_targets {
+        func.push_str(&format!("        load_target{}: load_target{},\n", i, i));
+    }
+    for i in 2..=num_targets {
+        func.push_str(&format!("        load_target{}_heap,\n", i));
+    }
+    func.push_str("        heap_alloc_size,\n");
+    for i in 1..=num_targets {
+        func.push_str(&format!("        length{},\n", i));
+    }
+    func.push_str("        ssp_saved,\n");
+    func.push_str("        cur_stack_size,\n");
+    func.push_str("    ) {\n");
+
+    // Get lengths of all chunks
+    for i in 1..=num_targets {
+        func.push_str(&format!("        csiz length{} load_target{};\n", i, i));
+    }
+
+    // Store load_target2 and onwards on the heap
+    for i in 2..=num_targets {
+        func.push_str("        addi heap_alloc_size zero i32;\n");
+        func.push_str("        aloc heap_alloc_size;\n");
+        func.push_str(&format!(
+            "        mcp hp load_target{} heap_alloc_size;\n",
+            i
+        ));
+        func.push_str(&format!("        move load_target{}_heap hp;\n", i));
+    }
+
+    // Save the old $ssp value and shrink the stack
+    func.push_str("        move ssp_saved ssp;\n");
+    func.push_str("        sub cur_stack_size sp ssp;\n");
+    func.push_str("        cfs cur_stack_size;\n");
+
+    // Do the loads
+    func.push_str("        ldc load_target1 zero length1;\n");
+    for i in 2..=num_targets {
+        func.push_str(&format!(
+            "        ldc load_target{}_heap zero length{};\n",
+            i, i
+        ));
+    }
+
+    // Set up jump
+    func.push_str("        addi heap_alloc_size zero i64;\n");
+    func.push_str("        aloc heap_alloc_size;\n");
+    func.push_str("        sw hp ssp_saved i0;\n");
+    func.push_str("    }\n");
+    func.push_str("    __jmp_mem()\n");
+    func.push_str("}\n");
+
+    func
+}
+
 /// Updates the given package manifest file such that the address field under the proxy table updated to the given value.
 /// Updated manifest file is written back to the same location, without thouching anything else such as comments etc.
 /// A safety check is done to ensure the proxy table exists before attempting to udpdate the value.
@@ -134,6 +299,45 @@ pub(crate) fn create_proxy_contract(
         .open(proxy_contract_dir.join(SRC_DIR).join(MAIN_ENTRY))?;
 
     let contract_str = generate_proxy_contract_src(addr, impl_contract_id);
+    write!(f, "{}", contract_str)?;
+    Ok(proxy_contract_dir)
+}
+
+/// Creates a proxy contract with chunking at the given path, adds a forc.toml and source file.
+pub(crate) fn create_proxy_contract_with_chunking(
+    abi: &ProgramABI,
+    chunk_contract_ids: &[&str],
+    num_chunks: usize,
+    pkg_name: &str,
+) -> Result<PathBuf> {
+    // Create the proxy contract folder.
+    let proxy_contract_dir = user_forc_directory()
+        .join(PROXY_CONTRACT_FOLDER_NAME)
+        .join(pkg_name);
+    std::fs::create_dir_all(&proxy_contract_dir)?;
+
+    // Create the Forc.toml
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(proxy_contract_dir.join(MANIFEST_FILE_NAME))?;
+    write!(f, "{}", PROXY_CONTRACT_FORC_TOML)?;
+
+    // Create the src folder
+    std::fs::create_dir_all(proxy_contract_dir.join(SRC_DIR))?;
+
+    // Create main.sw
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(proxy_contract_dir.join(SRC_DIR).join(MAIN_ENTRY))?;
+
+    let contract_str =
+        generate_proxy_contract_with_chunking_src(abi, num_chunks, chunk_contract_ids);
     write!(f, "{}", contract_str)?;
     Ok(proxy_contract_dir)
 }
