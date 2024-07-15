@@ -121,7 +121,10 @@ impl Session {
     }
 
     /// Clean up memory in the [TypeEngine] and [DeclEngine] for the user's workspace.
-    pub fn garbage_collect_program(&self, engines: &mut Engines) -> Result<(), LanguageServerError> {
+    pub fn garbage_collect_program(
+        &self,
+        engines: &mut Engines,
+    ) -> Result<(), LanguageServerError> {
         let path = self.sync.temp_dir()?;
         let program_id = { engines.se().get_program_id(&path) };
         if let Some(program_id) = program_id {
@@ -130,7 +133,11 @@ impl Session {
         Ok(())
     }
 
-    pub fn garbage_collect_module(&self, engines: &mut Engines, uri: &Url) -> Result<(), LanguageServerError> {
+    pub fn garbage_collect_module(
+        &self,
+        engines: &mut Engines,
+        uri: &Url,
+    ) -> Result<(), LanguageServerError> {
         let path = uri.to_file_path().unwrap();
         eprintln!("🗑️ Garbage collecting module {:?}", path);
         let source_id = { engines.se().get_source_id(&path) };
