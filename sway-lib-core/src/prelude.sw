@@ -7,6 +7,7 @@ use ::primitives::*;
 use ::primitive_conversions::*;
 use ::raw_ptr::*;
 use ::raw_slice::*;
+use ::slice::*;
 use ::never::*;
 use ::ops::*;
 use ::storage::*;
