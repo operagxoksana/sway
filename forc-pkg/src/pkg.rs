@@ -2657,6 +2657,7 @@ pub fn check(
 
     let mut results = vec![];
     for (idx, &node) in plan.compilation_order.iter().enumerate() {
+        let now = std::time::Instant::now();
         let pkg = &plan.graph[node];
         let manifest = &plan.manifest_map()[&pkg.id()];
 
@@ -2750,6 +2751,7 @@ pub fn check(
             return Ok(results);
         }
         results.push((programs_res.ok(), handler));
+        eprintln!("⏱️ Compiling package {:?} took {:?}", pkg.name, now.elapsed());
     }
 
     if results.is_empty() {
