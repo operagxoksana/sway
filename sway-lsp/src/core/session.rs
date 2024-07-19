@@ -139,7 +139,7 @@ impl Session {
         uri: &Url,
     ) -> Result<(), LanguageServerError> {
         let path = uri.to_file_path().unwrap();
-        eprintln!("🗑️ Garbage collecting module {:?}", path);
+        eprintln!("🗑️ 🗑️ 🗑️ 🗑️ 🗑️   Garbage collecting module {:?}   🗑️ 🗑️ 🗑️ 🗑️ 🗑️", path);
         let source_id = { engines.se().get_source_id(&path) };
         engines.clear_module(&source_id);
         Ok(())
@@ -328,6 +328,8 @@ pub fn traverse(
             let path = engines.se().get_path(source_id);
             let program_id = program_id_from_path(&path, engines)?;
             session.metrics.insert(program_id, metrics);
+
+            eprintln!("⤵️ Traversing: {:?}", path);
         }
 
         // Get a reference to the typed program AST.
@@ -398,6 +400,7 @@ pub fn parse_project(
     if results.last().is_none() {
         return Err(LanguageServerError::ProgramsIsNone);
     }
+    eprintln!("⤵️ Traversing the ASTS");
     let diagnostics = traverse(results, engines, session.clone())?;
     if let Some(config) = &lsp_mode {
         // Only write the diagnostics results on didSave or didOpen.
@@ -421,6 +424,7 @@ fn parse_ast_to_tokens(
     ctx: &ParseContext,
     f: impl Fn(&AstNode, &ParseContext) + Sync,
 ) {
+    eprintln!("⤵️ Parsing the AST");
     let nodes = parse_program
         .root
         .tree
@@ -442,6 +446,7 @@ fn parse_ast_to_typed_tokens(
     ctx: &ParseContext,
     f: impl Fn(&ty::TyAstNode, &ParseContext) + Sync,
 ) {
+    eprintln!("⤵️ Parsing the typed AST");
     let nodes = typed_program
         .root
         .all_nodes
